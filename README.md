@@ -92,8 +92,7 @@ ENV=(MOZ_ENABLE_WAYLAND=1 GTK_THEME=Adwaita:dark)
 
 `DEV_ALLOW` defines what remains available. Everything else in `/dev` is masked using `tmpfs` (directories) or `/dev/null` (files).
 
-Implementation detail: the script first binds `/dev`, then masks entries not matched by `DEV_ALLOW`.
-This keeps allowed glob patterns dynamic, so devices that appear later (for example a newly plugged YubiKey) still work if they match the allow-list.
+Implementation detail: the script first binds /dev, then masks entries not matched by DEV_ALLOW. This keeps allowed glob patterns dynamic, and devices that appear later (for example a newly plugged YubiKey) are not blocked.
 
 Alternative models are possible (fully open `/dev`, or mounting only a fixed device subset), but fixed mounts usually do not handle hot-plugged devices during runtime.
 
