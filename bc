@@ -1,0 +1,273 @@
+#!/usr/bin/env bash
+
+# BIN options: brave-origin, brave, chromium, helium-browser, firefox, librewolf, zen-browser 
+BIN=brave-origin
+
+# Set only if the application does not use the default paths:
+#   ~/.config/<APP> and ~/.cache/<APP>
+CONFIG_DIR=
+CACHE_DIR=
+
+# HOME_* and global RW/RO/MASKED support directories and files.
+# Entries are ignored when the path does not exist.
+HOME_RW=(Downloads Documents .config/dconf .config/mimeapps.list .pki)
+HOME_RO=()
+HOME_MASKED=()
+
+RW=()
+RO=(/run/cups) 
+MASKED=()
+
+# Additional env vars passed directly to the sandboxed command.
+# Format: NAME=value (empty values are allowed, e.g. DISPLAY=)
+ENV=()
+
+# All devices except those explicitly allowed will be redirected to /dev/null or replaced with an empty tmpfs mount.
+DEV_ALLOW=(null zero full random urandom ptmx pts dri snd video* media* core fd log stderr stdin stdout) 
+
+
+
+
+CMD="$BIN"
+SYSTEMD_RUN_ARGS=()
+
+if [[ ${1-} == "--bash" ]]; then
+    CMD=bash
+    SYSTEMD_RUN_ARGS+=(--pty)
+    shift
+fi
+
+
+declare -A APP=(
+    [brave-origin]=BraveSoftware
+    [brave]=BraveSoftware
+    [chromium]=chromium
+    [helium-browser]=net.imput.helium
+    [firefox]=mozilla
+    [zen-browser]=zen
+    [librewolf]=librewolf
+)
+
+APP="${APP[$BIN]}"
+
+: "${CONFIG_DIR:=.config/$APP}"
+: "${CACHE_DIR:=.cache/$APP}"
+
+DEV_FILTER=()
+for item in /dev/*; do
+    name=${item##*/}
+
+    for pattern in "${DEV_ALLOW[@]}"; do
+        [[ $name == $pattern ]] && continue 2
+    done
+
+    if [[ -d $item ]]; then
+        DEV_FILTER+=(--tmpfs "$item")
+    else
+        DEV_FILTER+=(--bind /dev/null "$item")
+    fi
+done
+
+HOME_RW_BINDS=()
+for entry in "${HOME_RW[@]}"; do
+    path="$HOME/$entry"
+    [[ -e "$path" ]] && HOME_RW_BINDS+=(--bind "$path" "$path")
+done
+
+HOME_RO_BINDS=()
+for entry in "${HOME_RO[@]}"; do
+    path="$HOME/$entry"
+    [[ -e "$path" ]] && HOME_RO_BINDS+=(--ro-bind "$path" "$path")
+done
+
+HOME_MASKED_BINDS=()
+for entry in "${HOME_MASKED[@]}"; do
+    path="$HOME/$entry"
+    if [[ -d "$path" ]]; then
+        HOME_MASKED_BINDS+=(--tmpfs "$path")
+    elif [[ -f "$path" ]]; then
+        HOME_MASKED_BINDS+=(--bind /dev/null "$path")
+    fi
+done
+
+RW_BINDS=()
+for entry in "${RW[@]}"; do
+    [[ -e "$entry" ]] && RW_BINDS+=(--bind "$entry" "$entry")
+done
+
+RO_BINDS=()
+for entry in "${RO[@]}"; do
+    [[ -e "$entry" ]] && RO_BINDS+=(--ro-bind "$entry" "$entry")
+done
+
+MASKED_BINDS=()
+for entry in "${MASKED[@]}"; do
+    if [[ -d "$entry" ]]; then
+        MASKED_BINDS+=(--tmpfs "$entry")
+    elif [[ -f "$entry" ]]; then
+        MASKED_BINDS+=(--bind /dev/null "$entry")
+    fi
+done
+
+EXTRA_ENV_ARGS=()
+for item in "${ENV[@]}"; do
+    if [[ "$item" != *=* ]]; then
+        echo "Ignoring invalid ENV entry (expected NAME=value): $item" >&2
+        continue
+    fi
+
+    name="${item%%=*}"
+    value="${item#*=}"
+
+    if [[ -z "$name" ]]; then
+        echo "Ignoring invalid ENV entry with empty name: $item" >&2
+        continue
+    fi
+
+    EXTRA_ENV_ARGS+=(--setenv "$name" "$value")
+done
+
+APP_BINDS=()
+for dir in "$CONFIG_DIR" "$CACHE_DIR"; do
+    path="$HOME/$dir"
+    [[ -d "$path" ]] && APP_BINDS+=(--bind "$path" "$path")
+done
+
+DISPLAY_ENV=()
+DISPLAY_BINDS=()
+DISPLAY_LATE_BINDS=()
+
+if [[ -n ${WAYLAND_DISPLAY-} && -n ${XDG_RUNTIME_DIR-} ]]; then
+    wayland_socket="$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY"
+    if [[ -S "$wayland_socket" ]]; then
+        DISPLAY_ENV+=(--setenv WAYLAND_DISPLAY "$WAYLAND_DISPLAY")
+        DISPLAY_ENV+=(--setenv XDG_RUNTIME_DIR "$XDG_RUNTIME_DIR")
+        [[ -n ${XDG_SESSION_TYPE-} ]] && DISPLAY_ENV+=(--setenv XDG_SESSION_TYPE "$XDG_SESSION_TYPE")
+        DISPLAY_BINDS+=(--ro-bind "$wayland_socket" "$wayland_socket")
+    fi
+fi
+
+
+if [[ -n ${DISPLAY-} ]]; then
+    display_value="$DISPLAY"
+    display_number=""
+
+    if [[ "$display_value" == *:* ]]; then
+        display_number="${display_value##*:}"
+        display_number="${display_number%%.*}"
+    fi
+
+    x11_socket="/tmp/.X11-unix/X$display_number"
+    if [[ -n "$display_number" && -S "$x11_socket" ]]; then
+        DISPLAY_ENV+=(--setenv DISPLAY "$DISPLAY")
+        [[ -n ${XDG_SESSION_TYPE-} ]] && DISPLAY_ENV+=(--setenv XDG_SESSION_TYPE "$XDG_SESSION_TYPE")
+
+        xauthority_file="${XAUTHORITY-}"
+
+        if [[ -z "$xauthority_file" ]] && command -v xauth >/dev/null 2>&1; then
+            xauthority_file="$(xauth info 2>/dev/null | awk -F': ' '/Authority file/ {print $2; exit}')"
+            [[ "$xauthority_file" == "(none)" ]] && xauthority_file=""
+        fi
+
+        : "${xauthority_file:=$HOME/.Xauthority}"
+
+        if [[ -f "$xauthority_file" ]]; then
+            DISPLAY_ENV+=(--setenv XAUTHORITY "$xauthority_file")
+            DISPLAY_LATE_BINDS+=(--ro-bind "$xauthority_file" "$xauthority_file")
+        fi
+    fi
+fi
+
+systemd-run --user \
+  "${SYSTEMD_RUN_ARGS[@]}" \
+  -p RestrictAddressFamilies="AF_UNIX AF_INET AF_INET6 AF_NETLINK" \
+  -p SystemCallErrorNumber=EPERM \
+  -p NoNewPrivileges=yes \
+  -p ProtectKernelTunables=yes \
+  -p ProtectKernelLogs=yes \
+  -p ProtectControlGroups=yes \
+  -p ProtectKernelModules=yes \
+  -p ProtectHostname=yes \
+  -p ProtectClock=yes \
+  -p ProtectProc=invisible \
+  -p ProcSubset=pid \
+  -p ProtectSystem=full \
+  -p RestrictSUIDSGID=yes \
+  -p LockPersonality=yes \
+  -p RestrictRealtime=yes \
+  -p CapabilityBoundingSet= \
+  -p AmbientCapabilities= \
+  -p SystemCallArchitectures=native \
+  -p SystemCallFilter=~@reboot \
+  -p SystemCallFilter=~@swap \
+  -p SystemCallFilter=~@debug \
+  -p SystemCallFilter=~@cpu-emulation \
+  -p SystemCallFilter=~@module \
+  -p SystemCallFilter=~@obsolete \
+  -p SystemCallFilter=~@raw-io \
+  -p SystemCallFilter=~@clock \
+  -p KillMode=control-group \
+  -p TimeoutStopSec=5 \
+  -p UMask=0077 \
+  -- \
+  bwrap \
+    --unshare-user \
+    --die-with-parent \
+    --new-session \
+    \
+    --clearenv \
+    --setenv VK_ICD_FILENAMES radeon_icd.json \
+    \
+    --setenv HOME /home/$USER \
+    --setenv USER "$USER" \
+    --setenv LOGNAME "$USER" \
+    "${DISPLAY_ENV[@]}" \
+    --setenv DBUS_SESSION_BUS_ADDRESS "unix:path=/run/user/$UID/bus" \
+    \
+    --symlink usr/lib /lib \
+    --symlink usr/lib64 /lib64 \
+    --symlink usr/bin /bin \
+    --symlink usr/bin /sbin \
+    \
+    --ro-bind /usr/lib /usr/lib \
+    --ro-bind /usr/lib64 /usr/lib64 \
+    --ro-bind /usr/bin /usr/bin \
+    --ro-bind /usr/share /usr/share \
+    --ro-bind /etc /etc \
+    --ro-bind /opt /opt \
+    \
+    --dev-bind /dev /dev \
+    "${DEV_FILTER[@]}" \
+    \
+    --proc /proc \
+    \
+    --ro-bind /run/dbus /run/dbus \
+    --ro-bind /run/udev /run/udev \
+    --ro-bind /run/lock /run/lock \
+    --tmpfs /run/media \
+    --tmpfs /run/systemd \
+    \
+    --ro-bind /sys/dev/char /sys/dev/char \
+    --ro-bind /sys/devices /sys/devices \
+    --ro-bind /sys/class/hidraw /sys/class/hidraw \
+    --ro-bind /sys/class/drm /sys/class/drm \
+    \
+    --ro-bind /run/user/$UID/bus /run/user/$UID/bus \
+    "${DISPLAY_BINDS[@]}" \
+    --ro-bind "$XDG_RUNTIME_DIR/pipewire-0" "$XDG_RUNTIME_DIR/pipewire-0" \
+    --ro-bind "$XDG_RUNTIME_DIR/pulse" "$XDG_RUNTIME_DIR/pulse" \
+    \
+    --bind /tmp /tmp \
+    \
+    --tmpfs /home/$USER \
+    \
+    "${EXTRA_ENV_ARGS[@]}" \
+    "${APP_BINDS[@]}" \
+    "${HOME_RW_BINDS[@]}" \
+    "${HOME_RO_BINDS[@]}" \
+    "${HOME_MASKED_BINDS[@]}" \
+    "${RW_BINDS[@]}" \
+    "${RO_BINDS[@]}" \
+    "${MASKED_BINDS[@]}" \
+    "${DISPLAY_LATE_BINDS[@]}" \
+    "$CMD" "$@" 
