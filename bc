@@ -222,6 +222,8 @@ systemd-run --user \
     --setenv LOGNAME "$USER" \
     "${DISPLAY_ENV[@]}" \
     --setenv DBUS_SESSION_BUS_ADDRESS "unix:path=/run/user/$UID/bus" \
+    --setenv LANG "${LANG:-}" \
+    --setenv LC_ALL "${LC_ALL:-}" \
     \
     --symlink usr/lib /lib \
     --symlink usr/lib64 /lib64 \
