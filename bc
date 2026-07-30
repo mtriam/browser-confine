@@ -216,7 +216,6 @@ systemd-run --user \
     --new-session \
     \
     --clearenv \
-    --setenv VK_ICD_FILENAMES radeon_icd.json \
     \
     --setenv HOME /home/$USER \
     --setenv USER "$USER" \
