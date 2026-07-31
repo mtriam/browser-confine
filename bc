@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 
-# BIN options: brave-origin, brave, chromium, helium-browser, firefox, librewolf, zen-browser 
+# BIN options: brave-origin, brave, chromium, falkon, floorp, helium-browser, firefox, librewolf, vivaldi, zen-browser 
 BIN=brave-origin
 
 # Set only if the application does not use the default paths:
 #   ~/.config/<APP> and ~/.cache/<APP>
+# Examples:
+#     CONFIG_DIR=~/.mozilla/firefox
+#     CONFIG_DIR=~/.floorp
 CONFIG_DIR=
 CACHE_DIR=
 
@@ -25,27 +28,55 @@ ENV=()
 # All devices except those explicitly allowed will be redirected to /dev/null or replaced with an empty tmpfs mount.
 DEV_ALLOW=(null zero full random urandom ptmx pts dri snd video* media* core fd log stderr stdin stdout) 
 
+# Duration of the --fast-start warm-up, in seconds.
+# Should be at least as long as the browser's first startup after a system boot.
+FAST_START_TIME=10
 
 
 
-CMD="$BIN"
+
+
 SYSTEMD_RUN_ARGS=()
+FAST_START_PROFILE=
 
-if [[ ${1-} == "--bash" ]]; then
-    CMD=bash
-    SYSTEMD_RUN_ARGS+=(--pty)
-    shift
-fi
+case "$BIN" in
+    firefox|librewolf|zen-browser)
+        FAST_START_PROFILE_ARG=--profile
+        ;;
+    *)
+        FAST_START_PROFILE_ARG=--user-data-dir
+        ;;
+esac
+
+case "${1-}" in
+    --bash)
+        CMD=(bash)
+        SYSTEMD_RUN_ARGS+=(--pty)
+        shift
+        ;;
+    --fast-start)
+        FAST_START_PROFILE="$(mktemp -d)"
+        SYSTEMD_RUN_ARGS+=(--wait)
+        CMD=(timeout -k 2s $FAST_START_TIME "$BIN" --headless "$FAST_START_PROFILE_ARG=$FAST_START_PROFILE")
+        shift
+        ;;
+    *)
+        CMD=("$BIN")
+        ;;
+esac
 
 
 declare -A APP=(
     [brave-origin]=BraveSoftware
     [brave]=BraveSoftware
     [chromium]=chromium
+    [falkon]=falkon
+    [floorp]=floorp
     [helium-browser]=net.imput.helium
     [firefox]=mozilla
     [zen-browser]=zen
     [librewolf]=librewolf
+    [vivaldi]=vivaldi
 )
 
 APP="${APP[$BIN]}"
@@ -271,4 +302,8 @@ systemd-run --user \
     "${RO_BINDS[@]}" \
     "${MASKED_BINDS[@]}" \
     "${DISPLAY_LATE_BINDS[@]}" \
-    "$CMD" "$@" 
+    "${CMD[@]}" "$@"
+
+if [[ -n "$FAST_START_PROFILE" ]]; then
+    rm -rf "$FAST_START_PROFILE"
+fi

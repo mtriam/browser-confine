@@ -20,6 +20,21 @@ The `bc` script limits filesystem/device access and applies syscall hardening, w
 - Installed browser binary selected in `BIN`
 - (Optional) `xauth` for X11 sessions
 
+## Supported browsers
+
+The launcher works with browsers predefined in `bc` under `BIN`:
+
+- `brave-origin`
+- `brave`
+- `chromium`
+- `falkon`
+- `floorp`
+- `helium-browser`
+- `firefox`
+- `librewolf`
+- `vivaldi`
+- `zen-browser`
+
 ## Quick start
 
 ```bash
@@ -39,6 +54,15 @@ You can also start a shell inside the same isolation profile:
 ./bc --bash
 ```
 
+You can add this to autostart.
+Then the browser usually starts faster:
+
+```bash
+./bc --fast-start
+```
+
+This flag runs the browser in headless mode with a temporary profile for the duration specified by FAST_START_TIME. It then stops the browser and removes the temporary profile.
+
 ## Configuration
 
 All configuration is done directly in `bc`.
@@ -46,7 +70,7 @@ All configuration is done directly in `bc`.
 ### 1) Choose the application
 
 ```bash
-# BIN options: brave-origin, brave, chromium, helium-browser, firefox, librewolf, zen-browser
+# BIN options: brave-origin, brave, chromium, falkon, floorp, helium-browser, firefox, librewolf, vivaldi, zen-browser
 BIN=brave-origin
 ```
 
@@ -80,12 +104,13 @@ ENV=()
 
 Entry format: `NAME=value`.
 
-In most setups, keep this list empty and let the script handle display-related variables automatically.
+The script automatically handles display-related variables.
 
 Example with custom variables:
 
 ```bash
 ENV=(MOZ_ENABLE_WAYLAND=1 GTK_THEME=Adwaita:dark)
+ENV=(DISPLAY=)
 ```
 
 ### 5) Device filtering (`/dev`)
@@ -123,12 +148,17 @@ Set in `bc`:
 
 ```bash
 BIN=firefox
+CONFIG_DIR=~/.mozilla/firefox
 ```
 
-Then adjust `HOME_RW` / `HOME_MASKED` as needed for your data layout.
+Then adjust `HOME_RW` / `HOME_RO` / `HOME_MASKED` as needed for your data layout.
 
 ## Troubleshooting
 
+- If the browser profile and cache do not exist yet, start the browser once without ./bc. 
+  This   will create them so they can be bind-mounted into the sandbox.
+- Run ./bc --bash to inspect the environment and mounted/masked directories. 
+  Then start the browser to view its logs and error messages.
 - No GUI: verify `DISPLAY` / `WAYLAND_DISPLAY` and socket availability.
 - No audio: verify `pipewire-0` and `pulse` under `XDG_RUNTIME_DIR`.
 - Missing file access: add paths to `HOME_RW`, `HOME_RO`, `RW`, or `RO`.
