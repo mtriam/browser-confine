@@ -17,7 +17,6 @@ The `bc` script limits filesystem/device access and applies syscall hardening, w
 
 - Linux with `systemd --user`
 - `bubblewrap` (`bwrap`)
-- Installed browser binary selected in `BIN`
 - (Optional) `xauth` for X11 sessions
 
 ## Supported browsers
@@ -38,30 +37,42 @@ The launcher works with browsers predefined in `bc` under `BIN`:
 ## Quick start
 
 ```bash
+mkdir -p ~/.local/bin
+cd ~/.local/bin
+wget https://raw.githubusercontent.com/mtriam/browser-confine/main/bc
 chmod +x bc
-./bc
+~/.local/bin/bc
 ```
 
-By default, the browser defined here is launched:
+By default, the script auto-detects an installed browser from the supported list. You can also specify a browser explicitly:
 
 ```bash
-BIN=brave-origin
+~/.local/bin/bc firefox
+~/.local/bin/bc brave
 ```
 
-You can also start a shell inside the same isolation profile:
+### Runtime options
 
 ```bash
-./bc --bash
+~/.local/bin/bc --bash           # Start an interactive shell inside the sandbox
+~/.local/bin/bc --fast-start     # Warm up the browser headlessly
+~/.local/bin/bc --app-menu       # Create a desktop application menu entry
+~/.local/bin/bc --remove-app-menu  # Remove the desktop application menu entry
 ```
 
-You can add this to autostart.
-Then the browser usually starts faster:
+### Auto-detection
+
+The script automatically detects the first available browser from the supported list when `BIN` is empty. You can also pass the browser name as the first argument to override the default or auto-detected choice.
+
+Examples:
 
 ```bash
-./bc --fast-start
+~/.local/bin/bc firefox
+~/.local/bin/bc brave --fast-start
+~/.local/bin/bc chromium --bash
 ```
 
-This flag runs the browser in headless mode with a temporary profile for the duration specified by FAST_START_TIME. It then stops the browser and removes the temporary profile.
+The `--fast-start` flag runs the browser in headless mode with a temporary profile for the duration specified by `FAST_START_TIME`. It then stops the browser and removes the temporary profile. This is useful for autostart to speed up the first real launch.
 
 ## Configuration
 
@@ -78,7 +89,7 @@ BIN=brave-origin
 
 ### 2) Config/cache directories
 
-If the app does not use `~/.config/<APP>` and `~/.cache/<APP>`, set these manually:
+If the app does not use `~/.config/<APP>` and `~/.cache/<APP>` or `~/.mozilla` or `~/.floorp`, set these manually:
 
 ```bash
 CONFIG_DIR=
@@ -94,7 +105,19 @@ CACHE_DIR=
 
 Non-existing paths are automatically ignored.
 
-### 4) Environment variables
+### 4) KeePassXC-Browser integration
+
+Enable KeePassXC-Browser integration for password management:
+
+```bash
+KEEPASSXC_BROWSER=true
+```
+
+When enabled, this automatically adds:
+- `/run/user/$UID` to read-only paths (`RO`)
+- `/run/user/$UID/systemd` to masked paths (`MASKED`)
+
+### 5) Environment variables
 
 Pass additional variables through:
 
@@ -142,22 +165,21 @@ The script applies hardening such as:
 
 This is practical hardening, not a formal guarantee against all attack classes.
 
-## Example: Firefox profile
+### File access and the file picker
 
-Set in `bc`:
+The browser runs inside a sandbox, but it launches `xdg-desktop-portal` for file operations such as opening or saving files.
 
-```bash
-BIN=firefox
-CONFIG_DIR=~/.mozilla/firefox
-```
+`xdg-desktop-portal` runs outside the browser sandbox, so the file picker can access the user's files and the user can select any file.
 
-Then adjust `HOME_RW` / `HOME_RO` / `HOME_MASKED` as needed for your data layout.
+However, **the browser itself does not gain unrestricted access to the selected file or the rest of the filesystem**. It can only access the paths that are explicitly exposed to it by the sandbox configuration.
+
+So even though the user can browse and select files outside the sandbox in the file picker, the browser remains restricted to its allowed filesystem paths.
 
 ## Troubleshooting
 
-- If the browser profile and cache do not exist yet, start the browser once without ./bc. 
+- If the browser profile and cache do not exist yet, start the browser once without ~/.local/bin/bc. 
   This   will create them so they can be bind-mounted into the sandbox.
-- Run ./bc --bash to inspect the environment and mounted/masked directories. 
+- Run ~/.local/bin/bc --bash to inspect the environment and mounted/masked directories. 
   Then start the browser to view its logs and error messages.
 - No GUI: verify `DISPLAY` / `WAYLAND_DISPLAY` and socket availability.
 - No audio: verify `pipewire-0` and `pulse` under `XDG_RUNTIME_DIR`.

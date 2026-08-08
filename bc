@@ -1,13 +1,10 @@
 #!/usr/bin/env bash
 
 # BIN options: brave-origin, brave, chromium, falkon, floorp, helium-browser, firefox, librewolf, vivaldi, zen-browser 
-BIN=brave-origin
+BIN=
 
 # Set only if the application does not use the default paths:
-#   ~/.config/<APP> and ~/.cache/<APP>
-# Examples:
-#     CONFIG_DIR=~/.mozilla/firefox
-#     CONFIG_DIR=~/.floorp
+#   ~/.config/<APP> and ~/.cache/<APP> or ~/.mozilla or ~/.floorp
 CONFIG_DIR=
 CACHE_DIR=
 
@@ -21,6 +18,8 @@ RW=()
 RO=(/run/cups) 
 MASKED=()
 
+
+
 # Additional env vars passed directly to the sandboxed command.
 # Format: NAME=value (empty values are allowed, e.g. DISPLAY=)
 ENV=()
@@ -28,42 +27,15 @@ ENV=()
 # All devices except those explicitly allowed will be redirected to /dev/null or replaced with an empty tmpfs mount.
 DEV_ALLOW=(null zero full random urandom ptmx pts dri snd video* media* core fd log stderr stdin stdout) 
 
+# Enable KeePassXC-Browser integration
+KEEPASSXC_BROWSER=false
+
 # Duration of the --fast-start warm-up, in seconds.
 # Should be at least as long as the browser's first startup after a system boot.
 FAST_START_TIME=10
 
-
-
-
-
-SYSTEMD_RUN_ARGS=()
-FAST_START_PROFILE=
-
-case "$BIN" in
-    firefox|librewolf|zen-browser)
-        FAST_START_PROFILE_ARG=--profile
-        ;;
-    *)
-        FAST_START_PROFILE_ARG=--user-data-dir
-        ;;
-esac
-
-case "${1-}" in
-    --bash)
-        CMD=(bash)
-        SYSTEMD_RUN_ARGS+=(--pty)
-        shift
-        ;;
-    --fast-start)
-        FAST_START_PROFILE="$(mktemp -d)"
-        SYSTEMD_RUN_ARGS+=(--wait)
-        CMD=(timeout -k 2s $FAST_START_TIME "$BIN" --headless "$FAST_START_PROFILE_ARG=$FAST_START_PROFILE")
-        shift
-        ;;
-    *)
-        CMD=("$BIN")
-        ;;
-esac
+# With --app-menu, create a separate application menu entry.
+EXEC_PATH="$HOME/.local/bin/bc"
 
 
 declare -A APP=(
@@ -78,6 +50,129 @@ declare -A APP=(
     [librewolf]=librewolf
     [vivaldi]=vivaldi
 )
+
+usage() {
+    cat <<'EOF'
+Usage: bc [BIN] [--bash] [--fast-start] [--help] [args]
+
+BIN:
+  brave-origin, brave, chromium, falkon, floorp, helium-browser,
+  firefox, librewolf, vivaldi, zen-browser
+
+Options:
+  --bash             start an interactive shell inside the sandbox
+  --fast-start       warm up the browser headlessly for a short time
+  --app-menu         create an application menu entry
+  --remove-app-menu  remove the application menu entry
+  --help             show this help message and exit
+
+Examples:
+  bc firefox
+  bc brave --fast-start
+  bc --bash
+EOF
+}
+
+create_desktop() {
+    local desktop
+    desktop=$(grep -rilm1 "^Exec=$BIN\([[:space:]]\|$\)" /usr/share/applications --include='*.desktop')
+
+    [[ $desktop ]] || return
+    mkdir -p ~/.local/share/applications
+
+    local dst="$HOME/.local/share/applications/${desktop##*/}"
+    dst="${dst%.desktop}-bc.desktop"
+    cp "$desktop" "$dst"
+
+    sed -i \
+        -e '0,/^Name=/s/\(^Name=.*\)$/\1 BC/' \
+        -e "s|^\(Exec=\)$BIN\b|\1$EXEC_PATH $BIN|" \
+        "$dst"
+}
+
+remove_desktop() {
+    local desktop
+    desktop=$(grep -rilm1 "^Exec=$BIN\([[:space:]]\|$\)" /usr/share/applications --include='*.desktop')
+
+    [[ $desktop ]] || return
+    local dst="$HOME/.local/share/applications/${desktop##*/}"
+    dst="${dst%.desktop}-bc.desktop"
+
+    [[ -f "$dst" ]] || return
+    rm -f -- "$dst"
+}
+
+
+
+if [[ "${1-}" == --help ]]; then
+    usage
+    exit 0
+fi
+
+SYSTEMD_RUN_ARGS=()
+FAST_START_PROFILE=
+
+[[ $# -gt 0 && $1 != --bash && $1 != --fast-start && -v "APP[$1]" ]] && BIN=$1 && shift
+
+[[ -z $BIN ]] && for k in "${!APP[@]}"; do command -v "$k" &>/dev/null && BIN=$k && break; done
+
+case "$BIN" in
+    firefox|librewolf|zen-browser)
+        FAST_START_PROFILE_ARG=--profile
+        ;;
+    *)
+        FAST_START_PROFILE_ARG=--user-data-dir
+        ;;
+esac
+
+if [[ "$BIN" == firefox && -z "$CONFIG_DIR" ]]; then
+    if [[ -d "$HOME/.mozilla" ]]; then
+        CONFIG_DIR='.mozilla'
+    elif [[ -d "$HOME/.config/mozilla" ]]; then
+        CONFIG_DIR='.config/mozilla'
+    fi
+elif [[ "$BIN" == floorp && -z "$CONFIG_DIR" ]]; then
+    CONFIG_DIR='.floorp'
+fi
+
+case "${1-}" in
+    --bash)
+        CMD=(bash)
+        SYSTEMD_RUN_ARGS+=(--pty)
+        shift
+        ;;
+    --fast-start)
+        FAST_START_PROFILE="$(mktemp -d)"
+        SYSTEMD_RUN_ARGS+=(--wait)
+        CMD=(timeout -k 2s $FAST_START_TIME "$BIN" --headless "$FAST_START_PROFILE_ARG=$FAST_START_PROFILE")
+        shift
+        ;;
+    --app-menu)
+        create_desktop && exit 0
+        echo "No desktop entry found for $BIN" >&2
+        exit 1
+        ;;
+    --remove-app-menu)
+        remove_desktop && exit 0
+        echo "No desktop entry found to remove for $BIN" >&2
+        exit 1
+        ;;
+    *)
+        CMD=("$BIN")
+        ;;
+esac
+
+
+# Enable additional binds for KeePassXC-Browser integration
+if [[ "$KEEPASSXC_BROWSER" == true ]]; then
+    RO+=(/run/user/$UID)
+    MASKED+=(/run/user/$UID/systemd)
+    
+    # Helium uses Google Chrome config directory
+    if [[ "$BIN" == "helium-browser" ]]; then
+        HOME_RW+=(.config/google-chrome)
+    fi
+fi
 
 APP="${APP[$BIN]}"
 
@@ -246,7 +341,7 @@ systemd-run --user \
     --die-with-parent \
     --new-session \
     \
-    --clearenv \
+        --clearenv \
     \
     --setenv HOME /home/$USER \
     --setenv USER "$USER" \
@@ -307,3 +402,5 @@ systemd-run --user \
 if [[ -n "$FAST_START_PROFILE" ]]; then
     rm -rf "$FAST_START_PROFILE"
 fi
+
+exit 0
